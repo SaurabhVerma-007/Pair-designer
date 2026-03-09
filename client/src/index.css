@@ -1,0 +1,111 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+
+    --popover: 240 10% 3.9%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+
+    --accent: 240 3.7% 15.9%;
+    --accent-foreground: 0 0% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 217.2 91.2% 59.8%;
+
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-primary/30;
+    font-family: var(--font-sans);
+  }
+
+  code, pre {
+    font-family: var(--font-mono);
+  }
+}
+
+/* Custom Scrollbar for sleek dark mode */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-800 rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-700;
+}
+
+/* Markdown prose styling */
+.prose {
+  @apply text-zinc-300 leading-relaxed;
+}
+.prose p {
+  @apply mb-4 last:mb-0;
+}
+.prose h1, .prose h2, .prose h3, .prose h4 {
+  @apply font-bold text-zinc-100 mt-8 mb-4 tracking-tight;
+}
+.prose h1 { @apply text-2xl; }
+.prose h2 { @apply text-xl border-b border-zinc-800 pb-2; }
+.prose h3 { @apply text-lg; }
+.prose ul {
+  @apply list-disc list-outside pl-5 mb-4 space-y-1;
+}
+.prose ol {
+  @apply list-decimal list-outside pl-5 mb-4 space-y-1;
+}
+.prose strong {
+  @apply font-semibold text-zinc-200;
+}
+.prose a {
+  @apply text-primary hover:underline underline-offset-4 decoration-primary/50;
+}
+.prose blockquote {
+  @apply border-l-4 border-zinc-700 pl-4 italic text-zinc-400 my-4;
+}
+.prose table {
+  @apply w-full text-left border-collapse mb-4;
+}
+.prose th {
+  @apply bg-zinc-800/50 p-2 border border-zinc-700 font-medium;
+}
+.prose td {
+  @apply p-2 border border-zinc-800;
+}
+
+/* Mermaid specific overrides to look good on dark mode */
+.mermaid-wrapper svg {
+  @apply max-w-full h-auto drop-shadow-lg;
+}
