@@ -4,71 +4,50 @@ import { storage } from "./storage";
 import { api } from "@shared/routes";
 import { z } from "zod";
 import Groq from "groq-sdk";
+import { SYSTEM_PROMPT, getModeContext } from "./config/prompts";
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY,
 });
 
-// 🔥 IMPROVED SYSTEM PROMPT - Based on quality improvement package
-const SYSTEM_PROMPT = `You are a senior software architect. Your name is Pair Designer.
+// Input validation schema
+const sendMessageSchema = z.object({
+  content: z.string().min(1, "Message cannot be empty").max(10000, "Message too long"),
+});
 
-Core Principles:
-1. Modeling Discipline: Never fabricate infrastructure numbers (instance counts, costs, etc.) without explicit mathematical derivation. 
-2. Explicit Assumptions: Label all assumptions clearly.
-3. Minimal Diagrams: Limit to exactly ONE minimal Mermaid diagram per response.
-4. Architecturally Disciplined: Do not default to microservices. Justify all distributed system choices with traffic math (requests/sec, data volume) vs monolith complexity.
-
-Structure:
-- Requirements & Scale Assumptions (labeled)
-- Modeling & Math (Show your work for capacity planning)
-- Architecture Design (Monolith vs Microservices justification)
-- Component Design & Data Flow
-- Mermaid Diagram (1 max)
-- Trade-offs & Recommendations
-
-## Mathematical Validation Rules
-
-Before finalizing any calculation:
-
-1. Convert units step-by-step (KB → MB → GB).
-2. Verify magnitude with sanity check.
-3. Compare output to real-world bounds.
-4. If result exceeds typical SaaS CRM patterns (e.g., >10GB/day per 200k DAU), re-evaluate assumptions.
-5. Never round across unit boundaries without explicit conversion.
-
-Mandatory Scale Depth Rules:
-
-If DAU > 50,000:
-1. Estimate peak concurrency.
-2. Derive peak RPS.
-3. Estimate DB QPS using query amplification.
-4. Identify at least one likely bottleneck.
-5. Evaluate operational impact of tenant isolation strategy.
-
-If these are missing, the modeling section is incomplete.
-
-Mermaid Rules:
-- Start blocks with valid types (graph TD, sequenceDiagram, etc.)
-- Use standard syntax only.
-- No text outside the Mermaid block inside the code block.`;
+// Configuration constants
+const MAX_CONTEXT_MESSAGES = 10; // Keep last 10 messages for context (prevents memory leak)
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Get all conversations
   app.get(api.conversations.list.path, async (req, res) => {
-    const result = await storage.getConversations();
-    res.json(result);
-  });
-
-  app.get(api.conversations.get.path, async (req, res) => {
-    const result = await storage.getConversation(Number(req.params.id));
-    if (!result) {
-      return res.status(404).json({ message: 'Conversation not found' });
+    try {
+      const result = await storage.getConversations();
+      res.json(result);
+    } catch (error) {
+      console.error("Error listing conversations:", error);
+      res.status(500).json({ message: "Failed to list conversations" });
     }
-    res.json(result);
   });
 
+  // Get single conversation
+  app.get(api.conversations.get.path, async (req, res) => {
+    try {
+      const result = await storage.getConversation(Number(req.params.id));
+      if (!result) {
+        return res.status(404).json({ message: 'Conversation not found' });
+      }
+      res.json(result);
+    } catch (error) {
+      console.error("Error getting conversation:", error);
+      res.status(500).json({ message: "Failed to get conversation" });
+    }
+  });
+
+  // Create new conversation
   app.post(api.conversations.create.path, async (req, res) => {
     try {
       const input = api.conversations.create.input.parse(req.body);
@@ -81,25 +60,44 @@ export async function registerRoutes(
           field: err.errors[0].path.join('.'),
         });
       }
+      console.error("Error creating conversation:", err);
       res.status(500).json({ message: 'Internal server error' });
     }
   });
 
+  // Delete conversation
   app.delete(api.conversations.delete.path, async (req, res) => {
-    await storage.deleteConversation(Number(req.params.id));
-    res.status(204).end();
+    try {
+      await storage.deleteConversation(Number(req.params.id));
+      res.status(204).end();
+    } catch (error) {
+      console.error("Error deleting conversation:", error);
+      res.status(500).json({ message: "Failed to delete conversation" });
+    }
   });
 
-  // Chat endpoint (streaming)
+  // Send message (streaming endpoint)
   app.post('/api/conversations/:id/messages', async (req, res) => {
     try {
       const conversationId = Number(req.params.id);
-      const { content } = req.body;
 
-      if (!content) {
-        return res.status(400).json({ message: "Content is required" });
+      // Validate conversation ID
+      if (isNaN(conversationId) || conversationId <= 0) {
+        return res.status(400).json({ message: "Invalid conversation ID" });
       }
 
+      // Validate input
+      const parseResult = sendMessageSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          message: parseResult.error.errors[0].message,
+          field: parseResult.error.errors[0].path.join('.'),
+        });
+      }
+
+      const { content } = parseResult.data;
+
+      // Get conversation
       const conversation = await storage.getConversation(conversationId);
       if (!conversation) {
         return res.status(404).json({ message: "Conversation not found" });
@@ -112,70 +110,88 @@ export async function registerRoutes(
         content,
       });
 
-      // Prepare context for Groq
-      const messages = conversation.messages.map(m => ({
+      // Prepare context with sliding window (only last N messages)
+      const recentMessages = conversation.messages.slice(-MAX_CONTEXT_MESSAGES);
+      const messages = recentMessages.map(m => ({
         role: m.role as "user" | "assistant",
         content: m.content
       }));
       messages.push({ role: "user", content });
 
-      // 🔥 Enhanced mode context
-      let modeContext = "";
-      if (conversation.mode === "design") {
-        modeContext = "\n\nMode: Design New System. Focus on architecture diagrams, capacity planning, cost estimates, and deployment strategies.";
-      } else if (conversation.mode === "review") {
-        modeContext = "\n\nMode: Review Existing Design. Focus on identifying bottlenecks, profiling tools, code optimizations with before/after comparisons, and quick wins.";
-      } else if (conversation.mode === "compare") {
-        modeContext = "\n\nMode: Compare Options. Focus on detailed comparison tables with specific metrics, code examples for each option, and use-case recommendations.";
-      } else if (conversation.mode === "scale") {
-        modeContext = "\n\nMode: Scale Planning. Focus on current vs target capacity, resource calculations, auto-scaling configs, and cost projections.";
-      } else if (conversation.mode === "optimize") {
-        modeContext = "\n\nMode: Optimize Performance. Focus on profiling, specific optimizations with percentage improvements, and cost vs performance trade-offs.";
-      } else if (conversation.mode === "debug") {
-        modeContext = "\n\nMode: Debug Issues. Focus on diagnostic steps, root cause analysis, and specific fixes with verification steps.";
-      }
+      // Get mode-specific context
+      const modeContext = getModeContext(conversation.mode);
 
+      // Setup SSE headers
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
-
-      const stream = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT + modeContext },
-          ...messages
-        ],
-        temperature: 0.2,      // Lower temperature for more focused responses
-        max_tokens: 4096,      // Allow longer, detailed responses
-        stream: true,
-      });
+      res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
 
       let fullResponse = "";
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content || "";
-        if (delta) {
-          fullResponse += delta;
-          res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+      try {
+        // Create streaming completion
+        const stream = await groq.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT + modeContext },
+            ...messages
+          ],
+          temperature: 0.2,
+          max_tokens: 4096,
+          stream: true,
+        });
+
+        // Stream chunks to client
+        for await (const chunk of stream) {
+          const delta = chunk.choices[0]?.delta?.content || "";
+          if (delta) {
+            fullResponse += delta;
+            res.write(`data: ${JSON.stringify({ content: delta })}\n\n`);
+          }
         }
+
+        // Save assistant message to database
+        await storage.createMessage({
+          conversationId,
+          role: "assistant",
+          content: fullResponse,
+        });
+
+        // Send completion signal
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+        res.end();
+
+      } catch (streamError) {
+        console.error("Groq streaming error:", streamError);
+
+        // Send error to client via SSE
+        const errorMessage = streamError instanceof Error
+          ? streamError.message
+          : "Unknown streaming error";
+
+        res.write(`data: ${JSON.stringify({
+          error: "AI service temporarily unavailable. Please try again.",
+          details: errorMessage
+        })}\n\n`);
+        res.end();
       }
 
-      // Save assistant message
-      await storage.createMessage({
-        conversationId,
-        role: "assistant",
-        content: fullResponse,
-      });
-
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
-      res.end();
     } catch (error) {
-      console.error("Error sending message:", error);
-      if (res.headersSent) {
-        res.write(`data: ${JSON.stringify({ error: "Failed to send message" })}\n\n`);
-        res.end();
+      console.error("Error in message endpoint:", error);
+
+      // If headers not sent, send JSON error
+      if (!res.headersSent) {
+        res.status(500).json({
+          error: "Failed to process message",
+          message: error instanceof Error ? error.message : "Unknown error"
+        });
       } else {
-        res.status(500).json({ error: "Failed to send message" });
+        // If streaming already started, send error via SSE
+        res.write(`data: ${JSON.stringify({
+          error: "Server error occurred"
+        })}\n\n`);
+        res.end();
       }
     }
   });

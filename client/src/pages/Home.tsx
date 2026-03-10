@@ -46,7 +46,7 @@ export function Home() {
       const newConv = await createMutation.mutateAsync({
         title: content.slice(0, 30) + (content.length > 30 ? "..." : ""),
         mode: selectedMode,
-      }) as Conversation;
+      });
 
       setLocation(`/c/${newConv.id}`);
       setTimeout(() => {

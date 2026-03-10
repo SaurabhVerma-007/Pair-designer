@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@shared/routes";
 
@@ -7,10 +7,15 @@ export function useChatStream(conversationId: number | null) {
   const [streamingText, setStreamingText] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const sendMessage = useCallback(async (content: string, targetId: number | null = conversationId) => {
     if (!targetId) return;
-    
+
+    // Cancel any existing stream
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = new AbortController();
+
     setIsStreaming(true);
     setStreamingText("");
     setError(null);
@@ -21,6 +26,7 @@ export function useChatStream(conversationId: number | null) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content }),
         credentials: "include",
+        signal: abortControllerRef.current.signal,
       });
 
       if (!res.ok) {
@@ -39,7 +45,7 @@ export function useChatStream(conversationId: number | null) {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        
+
         // Keep the last partial line in the buffer
         buffer = lines.pop() || "";
 
@@ -57,7 +63,6 @@ export function useChatStream(conversationId: number | null) {
                 setError(data.error);
               }
               if (data.done) {
-                // Done parsing stream
                 break;
               }
             } catch (err) {
@@ -67,15 +72,33 @@ export function useChatStream(conversationId: number | null) {
         }
       }
     } catch (err) {
+      // Don't show error for user-initiated cancellations
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.log('Stream aborted by user');
+        return;
+      }
       setError(err instanceof Error ? err.message : "An error occurred during generation");
     } finally {
       setIsStreaming(false);
-      // Invalidate the specific conversation to refetch the full message history
+
+      // Clear streaming text after a short delay to allow UI to update
+      setTimeout(() => {
+        setStreamingText("");
+      }, 100);
+
+      // Invalidate queries to refetch updated conversation
       queryClient.invalidateQueries({ queryKey: [api.conversations.get.path, targetId] });
-      // Invalidate list to update timestamps/previews if applicable
       queryClient.invalidateQueries({ queryKey: [api.conversations.list.path] });
     }
   }, [conversationId, queryClient]);
 
-  return { sendMessage, streamingText, isStreaming, error };
+  const cancelStream = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsStreaming(false);
+      setStreamingText("");
+    }
+  }, []);
+
+  return { sendMessage, cancelStream, streamingText, isStreaming, error };
 }
